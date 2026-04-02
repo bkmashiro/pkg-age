@@ -4,6 +4,7 @@ export interface RegistryMetadata {
   latestReleaseDate: string | null;
   deprecatedMessage: string | null;
   archived: boolean;
+  esmOnlyLatest: boolean;
   versions: string[];
 }
 
@@ -39,6 +40,18 @@ export interface AnalysisSummary {
   unmaintained: number;
   old: number;
   majorUpdates: number;
+}
+
+export type UpdateType = "current" | "patch" | "minor" | "major" | "unknown";
+
+export interface UpdateAssessment {
+  name: string;
+  currentVersion: string;
+  latestVersion: string;
+  updateType: UpdateType;
+  safe: boolean;
+  safeLabel: string;
+  commandGroup: "safe" | "risky" | "none";
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -129,6 +142,62 @@ export function summarizePackages(results: AnalyzedPackage[]): AnalysisSummary {
   );
 }
 
+export function analyzePackageUpdate(
+  dependency: DependencyInput,
+  registry: RegistryMetadata,
+): UpdateAssessment {
+  const currentVersion = normalizeVersionSpecifier(dependency.specifier);
+  const currentSemver = parseSemver(currentVersion);
+  const latestSemver = parseSemver(registry.latestVersion);
+  const updateType = getUpdateType(currentSemver, latestSemver);
+
+  if (updateType === "current") {
+    return {
+      name: dependency.name,
+      currentVersion,
+      latestVersion: registry.latestVersion,
+      updateType,
+      safe: true,
+      safeLabel: "✅ up to date",
+      commandGroup: "none",
+    };
+  }
+
+  if (updateType === "patch" || updateType === "minor") {
+    return {
+      name: dependency.name,
+      currentVersion,
+      latestVersion: registry.latestVersion,
+      updateType,
+      safe: true,
+      safeLabel: "✅ safe to upgrade",
+      commandGroup: "safe",
+    };
+  }
+
+  if (updateType === "major") {
+    return {
+      name: dependency.name,
+      currentVersion,
+      latestVersion: registry.latestVersion,
+      updateType,
+      safe: false,
+      safeLabel: registry.esmOnlyLatest ? "⚠ ESM only" : "⚠ breaking changes likely",
+      commandGroup: "risky",
+    };
+  }
+
+  return {
+    name: dependency.name,
+    currentVersion,
+    latestVersion: registry.latestVersion,
+    updateType,
+    safe: false,
+    safeLabel: "⚠ review manually",
+    commandGroup: "risky",
+  };
+}
+
 export function sortPackages(results: AnalyzedPackage[], field: "age" | "name" | "status"): AnalyzedPackage[] {
   const copy = [...results];
   copy.sort((left, right) => {
@@ -169,6 +238,38 @@ export function normalizeVersionSpecifier(specifier: string): string {
 export function parseMajorVersion(version: string): number | null {
   const match = version.match(/^(\d+)/);
   return match ? Number.parseInt(match[1], 10) : null;
+}
+
+function parseSemver(version: string): { major: number; minor: number; patch: number } | null {
+  const match = version.match(/^(\d+)\.(\d+)\.(\d+)/);
+  if (!match) {
+    return null;
+  }
+
+  return {
+    major: Number.parseInt(match[1], 10),
+    minor: Number.parseInt(match[2], 10),
+    patch: Number.parseInt(match[3], 10),
+  };
+}
+
+function getUpdateType(
+  current: { major: number; minor: number; patch: number } | null,
+  latest: { major: number; minor: number; patch: number } | null,
+): UpdateType {
+  if (!current || !latest) {
+    return "unknown";
+  }
+  if (current.major !== latest.major) {
+    return "major";
+  }
+  if (current.minor !== latest.minor) {
+    return "minor";
+  }
+  if (current.patch !== latest.patch) {
+    return "patch";
+  }
+  return "current";
 }
 
 function diffDays(now: Date, releaseDate: Date): number {

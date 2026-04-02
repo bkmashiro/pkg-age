@@ -19,6 +19,9 @@ pkg-age --deprecated-only
 pkg-age --no-dev
 pkg-age --json
 pkg-age --sort age
+pkg-age --watch
+pkg-age --watch --interval 3600
+pkg-age --update-check
 ```
 
 Example output:
@@ -38,6 +41,9 @@ moment   2.29.4   2.29.4  1 year ago   ✗ DEPRECATED -> This package is in main
 - `--deprecated-only`: only show deprecated packages
 - `--no-dev`: skip `devDependencies`
 - `--sort <field>`: sort by `age`, `name`, or `status`
+- `--watch`: keep checking packages and only report status transitions
+- `--interval <seconds>`: polling interval for `--watch`, default `86400`
+- `--update-check`: show patch/minor/major upgrade categories and grouped `npm install` commands
 
 ## How It Works
 

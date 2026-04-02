@@ -1,6 +1,6 @@
 import chalk from "chalk";
 
-import type { AnalysisSummary, AnalyzedPackage } from "./analyzer.js";
+import type { AnalysisSummary, AnalyzedPackage, UpdateAssessment } from "./analyzer.js";
 
 interface JsonOutput {
   generatedAt: string;
@@ -42,6 +42,27 @@ export function formatJson(results: AnalyzedPackage[], summary: AnalysisSummary)
     summary,
   };
   return JSON.stringify(payload, null, 2);
+}
+
+export function formatUpdateTable(results: UpdateAssessment[]): string {
+  const headers = ["Package", "Current", "Latest", "Type", "Safe?"];
+  const rows = results.map((item) => [
+    item.name,
+    item.currentVersion,
+    item.latestVersion,
+    item.updateType,
+    item.safeLabel,
+  ]);
+  const widths = headers.map((header, index) =>
+    Math.max(header.length, ...rows.map((row) => stripAnsi(row[index]).length)),
+  );
+
+  return [
+    "Packages with available updates:",
+    "",
+    formatRow(headers, widths, { header: true }),
+    ...rows.map((row) => formatRow(row, widths)),
+  ].join("\n");
 }
 
 function renderStatus(item: AnalyzedPackage): string {

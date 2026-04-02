@@ -7,7 +7,16 @@ interface RegistryDocument {
     latest?: string;
   };
   time?: Record<string, string>;
-  versions?: Record<string, { deprecated?: string }>;
+  versions?: Record<
+    string,
+    {
+      deprecated?: string;
+      type?: string;
+      exports?: unknown;
+      main?: string;
+      module?: string;
+    }
+  >;
 }
 
 export interface RegistryFetchResult {
@@ -70,6 +79,7 @@ async function fetchSinglePackage(packageName: string): Promise<RegistryFetchRes
         latestReleaseDate: document.time?.[latestVersion] ?? null,
         deprecatedMessage: latestVersionDocument?.deprecated ?? null,
         archived: false,
+        esmOnlyLatest: isEsmOnlyPackage(latestVersionDocument),
         versions: Object.keys(document.versions ?? {}),
       },
       error: null,
@@ -87,4 +97,79 @@ function encodePackageName(packageName: string): string {
     .split("/")
     .map((part) => encodeURIComponent(part))
     .join("/");
+}
+
+function isEsmOnlyPackage(
+  versionDocument:
+    | {
+        type?: string;
+        exports?: unknown;
+        main?: string;
+        module?: string;
+      }
+    | undefined,
+): boolean {
+  if (!versionDocument) {
+    return false;
+  }
+
+  if (hasRequireCondition(versionDocument.exports) || hasCommonJsEntry(versionDocument.exports)) {
+    return false;
+  }
+
+  if (typeof versionDocument.main === "string" && versionDocument.main.endsWith(".cjs")) {
+    return false;
+  }
+
+  if (typeof versionDocument.exports !== "undefined") {
+    return versionDocument.type === "module" || hasImportCondition(versionDocument.exports);
+  }
+
+  return versionDocument.type === "module";
+}
+
+function hasRequireCondition(value: unknown): boolean {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  for (const [key, nestedValue] of Object.entries(value)) {
+    if (key === "require") {
+      return true;
+    }
+    if (hasRequireCondition(nestedValue)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function hasImportCondition(value: unknown): boolean {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  for (const [key, nestedValue] of Object.entries(value)) {
+    if (key === "import") {
+      return true;
+    }
+    if (hasImportCondition(nestedValue)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function hasCommonJsEntry(value: unknown): boolean {
+  if (typeof value === "string") {
+    return value.endsWith(".cjs");
+  }
+
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  return Object.values(value).some((nestedValue) => hasCommonJsEntry(nestedValue));
 }

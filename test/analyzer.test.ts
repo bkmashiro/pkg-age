@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   analyzePackage,
+  analyzePackageUpdate,
   formatAge,
   normalizeVersionSpecifier,
   parseMajorVersion,
@@ -19,6 +20,7 @@ function registry(overrides: Partial<Parameters<typeof analyzePackage>[1]> = {})
     latestReleaseDate: "2026-03-03T00:00:00.000Z",
     deprecatedMessage: null,
     archived: false,
+    esmOnlyLatest: false,
     versions: ["4.0.0", "5.0.0"],
     ...overrides,
   };
@@ -214,6 +216,53 @@ test("sortPackages sorts by name, age, and severity without mutating input", () 
     input.map((item) => item.name),
     ["beta", "zeta", "alpha"],
   );
+});
+
+test("analyzePackageUpdate marks patch and minor upgrades as safe", () => {
+  const patch = analyzePackageUpdate(
+    dependency("^5.0.0"),
+    registry({ latestVersion: "5.0.1", versions: ["5.0.0", "5.0.1"] }),
+  );
+  const minor = analyzePackageUpdate(
+    dependency("^5.0.0"),
+    registry({ latestVersion: "5.1.0", versions: ["5.0.0", "5.1.0"] }),
+  );
+
+  assert.equal(patch.updateType, "patch");
+  assert.equal(patch.commandGroup, "safe");
+  assert.equal(minor.updateType, "minor");
+  assert.equal(minor.commandGroup, "safe");
+});
+
+test("analyzePackageUpdate marks major ESM-only upgrades as risky", () => {
+  const result = analyzePackageUpdate(
+    dependency("^4.1.0"),
+    registry({
+      latestVersion: "5.0.0",
+      esmOnlyLatest: true,
+      versions: ["4.1.0", "5.0.0"],
+    }),
+  );
+
+  assert.equal(result.updateType, "major");
+  assert.equal(result.commandGroup, "risky");
+  assert.equal(result.safeLabel, "⚠ ESM only");
+});
+
+test("analyzePackageUpdate reports current and unknown versions distinctly", () => {
+  const current = analyzePackageUpdate(
+    dependency("^5.0.0"),
+    registry({ latestVersion: "5.0.0", versions: ["5.0.0"] }),
+  );
+  const unknown = analyzePackageUpdate(
+    dependency("npm:chalk@5"),
+    registry({ latestVersion: "5.3.0", versions: ["5.3.0"] }),
+  );
+
+  assert.equal(current.updateType, "current");
+  assert.equal(current.commandGroup, "none");
+  assert.equal(unknown.updateType, "unknown");
+  assert.equal(unknown.commandGroup, "risky");
 });
 
 test("summarizePackages counts statuses and major updates", () => {
