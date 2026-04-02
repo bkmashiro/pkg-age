@@ -1,6 +1,6 @@
 {
   "name": "pkg-age",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "CLI to inspect npm dependency health by release age, major version drift, and deprecation status.",
   "type": "module",
   "bin": {
