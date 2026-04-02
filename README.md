@@ -22,6 +22,8 @@ pkg-age --sort age
 pkg-age --watch
 pkg-age --watch --interval 3600
 pkg-age --update-check
+pkg-age --risk-score
+pkg-age --alternatives
 ```
 
 Example output:
@@ -44,6 +46,8 @@ moment   2.29.4   2.29.4  1 year ago   ✗ DEPRECATED -> This package is in main
 - `--watch`: keep checking packages and only report status transitions
 - `--interval <seconds>`: polling interval for `--watch`, default `86400`
 - `--update-check`: show patch/minor/major upgrade categories and grouped `npm install` commands
+- `--risk-score`: calculate a per-package risk score from release age, maintenance signals, and npm security advisories
+- `--alternatives`: suggest curated replacements for risky packages with known modern substitutes
 
 ## How It Works
 
@@ -54,6 +58,8 @@ moment   2.29.4   2.29.4  1 year ago   ✗ DEPRECATED -> This package is in main
 - `versions[latest].deprecated`
 
 The CLI then marks packages as deprecated, unmaintained, old, outdated, or active and sorts them by severity.
+
+For Round 3 analysis modes, `pkg-age` also queries npm's bulk security advisory endpoint to fold known advisories into package risk scores and replacement suggestions.
 
 ## Compared With `npm outdated`
 

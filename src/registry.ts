@@ -19,8 +19,20 @@ interface RegistryDocument {
   >;
 }
 
+interface AdvisoryDocument {
+  id: number;
+  url: string;
+  title: string;
+  severity: "critical" | "high" | "moderate" | "low" | "info";
+}
+
 export interface RegistryFetchResult {
   data: RegistryMetadata | null;
+  error: string | null;
+}
+
+export interface AdvisoryFetchResult {
+  advisories: AdvisoryDocument[];
   error: string | null;
 }
 
@@ -43,6 +55,62 @@ export async function fetchRegistryMetadata(packageNames: string[]): Promise<Map
   const workers = Array.from({ length: Math.min(MAX_CONCURRENCY, packageNames.length) }, () => worker());
   await Promise.all(workers);
   return results;
+}
+
+export async function fetchSecurityAdvisories(
+  packageVersions: Array<{ name: string; version: string }>,
+): Promise<Map<string, AdvisoryFetchResult>> {
+  const results = new Map<string, AdvisoryFetchResult>();
+  const payload: Record<string, string[]> = {};
+
+  for (const entry of packageVersions) {
+    if (!entry.version) {
+      continue;
+    }
+    if (!(entry.name in payload)) {
+      payload[entry.name] = [];
+    }
+    payload[entry.name]?.push(entry.version);
+  }
+
+  if (Object.keys(payload).length === 0) {
+    return results;
+  }
+
+  try {
+    const response = await fetch(new URL("/-/npm/v1/security/advisories/bulk", REGISTRY_ORIGIN), {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      const error = `security advisory request failed with ${response.status}`;
+      for (const entry of packageVersions) {
+        results.set(entry.name, { advisories: [], error });
+      }
+      return results;
+    }
+
+    const document = (await response.json()) as Record<string, AdvisoryDocument[]>;
+    for (const entry of packageVersions) {
+      results.set(entry.name, {
+        advisories: document[entry.name] ?? [],
+        error: null,
+      });
+    }
+
+    return results;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "unknown fetch error";
+    for (const entry of packageVersions) {
+      results.set(entry.name, { advisories: [], error: message });
+    }
+    return results;
+  }
 }
 
 async function fetchSinglePackage(packageName: string): Promise<RegistryFetchResult> {

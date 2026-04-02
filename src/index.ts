@@ -5,9 +5,11 @@ import path from "node:path";
 
 import { Command } from "commander";
 
-import { analyzePackage, analyzePackageUpdate, sortPackages, summarizePackages, type DependencyInput } from "./analyzer.js";
+import { analyzePackage, analyzePackageUpdate, normalizeVersionSpecifier, sortPackages, summarizePackages, type DependencyInput } from "./analyzer.js";
+import { lookupAlternative } from "./alternatives.js";
 import { formatJson, formatTable, formatUpdateTable } from "./formatter.js";
-import { fetchRegistryMetadata, type RegistryFetchResult } from "./registry.js";
+import { fetchRegistryMetadata, fetchSecurityAdvisories, type RegistryFetchResult } from "./registry.js";
+import { scorePackageRisk, summarizeVulnerabilities } from "./risk-scorer.js";
 import { runWatcher } from "./watcher.js";
 
 interface PackageJsonShape {
@@ -27,7 +29,9 @@ program
   .option("--sort <field>", "Sort by: age|name|status", "status")
   .option("--watch", "Re-check packages periodically and report status changes", false)
   .option("--interval <seconds>", "Watch interval in seconds", "86400")
-  .option("--update-check", "Show available upgrades and grouped install commands", false);
+  .option("--update-check", "Show available upgrades and grouped install commands", false)
+  .option("--risk-score", "Score dependencies by age, maintenance, and security risk", false)
+  .option("--alternatives", "Suggest replacements for risky or outdated packages", false);
 
 program.parse(process.argv);
 
@@ -40,6 +44,8 @@ const options = program.opts<{
   watch: boolean;
   interval: string;
   updateCheck: boolean;
+  riskScore: boolean;
+  alternatives: boolean;
 }>();
 
 const validSorts = new Set(["age", "name", "status"]);
@@ -78,6 +84,20 @@ try {
     console.log(formatUpdateTable(updates));
     printUpgradeCommands(updates);
     printFailures(failures, options.json);
+    process.exit(0);
+  }
+
+  if (options.riskScore) {
+    const riskResults = await inspectPackageRisks(dependencies);
+    console.log(formatRiskAnalysis(riskResults.risks));
+    printFailures(riskResults.failures, options.json);
+    process.exit(0);
+  }
+
+  if (options.alternatives) {
+    const alternatives = await inspectAlternatives(dependencies);
+    console.log(formatAlternatives(alternatives.suggestions));
+    printFailures(alternatives.failures, options.json);
     process.exit(0);
   }
 
@@ -155,6 +175,98 @@ async function inspectPackageUpdates(dependencies: DependencyInput[]) {
   return { updates, failures };
 }
 
+async function inspectPackageRisks(dependencies: DependencyInput[]) {
+  const { analyzed, failures } = await inspectPackagesWithFailures(dependencies);
+  const advisoryResults = await fetchSecurityAdvisories(
+    dependencies.map((dependency) => ({
+      name: dependency.name,
+      version: normalizeVersionSpecifier(dependency.specifier),
+    })),
+  );
+
+  const risks = analyzed
+    .map((item) => {
+      const advisories = advisoryResults.get(item.name);
+      const vulnerabilitySummary = summarizeVulnerabilities(advisories?.advisories ?? []);
+      return scorePackageRisk(item, vulnerabilitySummary);
+    })
+    .sort((left, right) => right.score - left.score || left.name.localeCompare(right.name));
+
+  return {
+    risks,
+    failures: [
+      ...failures,
+      ...dependencies
+        .map((dependency) => ({ name: dependency.name, advisories: advisoryResults.get(dependency.name) }))
+        .filter((item) => item.advisories?.error)
+        .map((item) => ({
+          name: item.name,
+          result: {
+            data: null,
+            error: item.advisories?.error ?? "unknown advisory error",
+          },
+        })),
+    ],
+  };
+}
+
+async function inspectAlternatives(dependencies: DependencyInput[]) {
+  const { analyzed, failures } = await inspectPackagesWithFailures(dependencies);
+  const updates = await inspectPackageUpdates(dependencies);
+  const advisoryResults = await fetchSecurityAdvisories(
+    dependencies.map((dependency) => ({
+      name: dependency.name,
+      version: normalizeVersionSpecifier(dependency.specifier),
+    })),
+  );
+  const updateByName = new Map(updates.updates.map((item) => [item.name, item]));
+
+  const suggestions = analyzed
+    .flatMap((item) => {
+      const alternative = lookupAlternative(item.name);
+      if (!alternative) {
+        return [];
+      }
+
+      const vulnerabilitySummary = summarizeVulnerabilities(advisoryResults.get(item.name)?.advisories ?? []);
+      const update = updateByName.get(item.name);
+      const shouldSuggest =
+        item.status !== "active" ||
+        item.hasMajorUpdate ||
+        vulnerabilitySummary.total > 0 ||
+        update?.commandGroup === "risky";
+
+      if (!shouldSuggest) {
+        return [];
+      }
+
+      return [{
+        name: item.name,
+        version: item.currentVersion,
+        alternative,
+      }];
+    })
+    .sort((left, right) => left.name.localeCompare(right.name));
+
+  return {
+    suggestions,
+    failures: [
+      ...failures,
+      ...updates.failures,
+      ...dependencies
+        .map((dependency) => ({ name: dependency.name, advisories: advisoryResults.get(dependency.name) }))
+        .filter((item) => item.advisories?.error)
+        .map((item) => ({
+          name: item.name,
+          result: {
+            data: null,
+            error: item.advisories?.error ?? "unknown advisory error",
+          },
+        })),
+    ],
+  };
+}
+
 function printUpgradeCommands(
   updates: Array<ReturnType<typeof analyzePackageUpdate>>,
 ): void {
@@ -181,4 +293,42 @@ function printFailures(
   for (const failure of failures) {
     console.error(`Failed to inspect ${failure.name}: ${failure.result?.error}`);
   }
+}
+
+function formatRiskAnalysis(results: Awaited<ReturnType<typeof inspectPackageRisks>>["risks"]): string {
+  if (results.length === 0) {
+    return "No dependencies found.";
+  }
+
+  const lines = ["Dependency Risk Analysis:", ""];
+
+  for (const item of results) {
+    lines.push(`  ${item.name}@${item.version}  Risk: ${item.score}/100 (${item.level})`);
+    for (const factor of item.factors) {
+      lines.push(`    ${factor.label.padEnd(36)} (+${factor.points})`);
+    }
+    lines.push("");
+  }
+
+  const topRisks = results.filter((item) => item.score >= 25).slice(0, 3).map((item) => item.name);
+  lines.push(topRisks.length > 0 ? `Top risks: ${topRisks.join(", ")}` : "Top risks: none");
+  return lines.join("\n");
+}
+
+function formatAlternatives(results: Awaited<ReturnType<typeof inspectAlternatives>>["suggestions"]): string {
+  if (results.length === 0) {
+    return "No risky packages with known alternatives found.";
+  }
+
+  return [
+    "Outdated packages with better alternatives:",
+    "",
+    ...results.map((item) => {
+      const suggestionText =
+        item.alternative.suggestions.length === 1
+          ? item.alternative.suggestions[0]
+          : `${item.alternative.suggestions.slice(0, -1).join(" or ")} or ${item.alternative.suggestions.at(-1)}`;
+      return `  ${item.name}@${item.version} -> ${suggestionText} (${item.alternative.reason})`;
+    }),
+  ].join("\n");
 }
