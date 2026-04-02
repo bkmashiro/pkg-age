@@ -1,3 +1,5 @@
+[![npm](https://img.shields.io/npm/v/pkg-age)](https://www.npmjs.com/package/pkg-age) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 # pkg-age
 
 `pkg-age` is a CLI that inspects the health of your npm dependencies by checking their latest release date, major version drift, and deprecation status from the npm registry.
