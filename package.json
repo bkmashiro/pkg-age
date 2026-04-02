@@ -1,0 +1,27 @@
+{
+  "name": "pkg-age",
+  "version": "0.1.0",
+  "description": "CLI to inspect npm dependency health by release age, major version drift, and deprecation status.",
+  "type": "module",
+  "bin": {
+    "pkg-age": "dist/index.js"
+  },
+  "files": [
+    "dist/",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "tsc",
+    "test": "node --import tsx/esm --test test/**/*.test.ts"
+  },
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "commander": "^14.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^6.0.0"
+  }
+}
